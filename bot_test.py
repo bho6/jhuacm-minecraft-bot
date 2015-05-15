@@ -22,59 +22,76 @@ def wrap_packet(func):
 # Used to convert a standard Python integer into a VarInt.
 def varint(num):
     binary = "{:b}".format(num)
-    while len(binary) % 8 != 0: # pad until full byte
+    while len(binary) % 7 != 0: # pad until full
         binary = '0' + binary
-    print binary
+    bytes = []
+    byte_parts = [binary[x:x+7] for x in xrange(0, len(binary), 7)]
+    for b in byte_parts[:-1]:
+        bytes.append(int('1{}'.format(b), 2))
+    bytes.append(int('0{}'.format(byte_parts[-1]), 2))
+    return bytes
 
 
+# Used to convert a standard Python integer into byte form.
+def bnum(num, num_bytes):
+    binary = "{:b}".format(num)
+    while len(binary) < num_bytes * 8:
+        binary = '0' + binary
+    bytes = []
+    for b in xrange(0, num_bytes):
+        bytes.append(int(binary[b*8:(b+1)*8], 2))
+    return bytes
 
-# Send a handshake packet to the server.
+
+# Used to convert a Python string into a UTF-8 string prepended with its
+# length in bytes.
+def string(str_to_encode):
+    bytes = []
+    bytes.append(len(str_to_encode))
+    for c in unicode(str_to_encode, 'utf-8'):
+        bytes.append(ord(c))
+    return bytes
+
+
+# Function that appends an element to a given packet using a generator
+# function like varint or string.
+def append_packet(packet, gen_func, *args):
+    result = gen_func(*args)
+    for byte in result:
+        packet.append(byte)
+
+
+# Send a Handshake packet to the server.
 @wrap_packet
 def s_handshake(version, server_addr, port, mode):
     payload = bytearray()
-    payload.append(version)
-    ba.append(59)
-    return ba
+    append_packet(payload, bnum, 0, 1)
+    append_packet(payload, varint, version)
+    append_packet(payload, string, server_addr)
+    append_packet(payload, bnum, port, 2)
+    append_packet(payload, varint, mode)
+    return payload
+
+
+# Send a Login Start packet to the server.
+@wrap_packet
+def s_login_start(name):
+    payload = bytearray()
+    append_packet(payload, bnum, 0, 1)
+    append_packet(payload, string, name)
+    return payload
+
 
 def main():
-    sys.exit(1)
-    TCP_IP = 'london.acm.jhu.edu'
-    TCP_PORT = 25565
-    BUFFER_SIZE = 1024
-    MESSAGE = bytearray()
-    MESSAGE.append(0)
-    MESSAGE.append(47)
-    GAME_ADDRESS = 'london.acm.jhu.edu'
-    MESSAGE.append(len(GAME_ADDRESS))
-    for c in unicode(GAME_ADDRESS, "utf-8"):
-        MESSAGE.append(ord(c))
-
-    MESSAGE.append(99)
-    MESSAGE.append(221)
-
-    MESSAGE.append(2)
-
-    total_message = bytearray()
-    total_message.append(len(MESSAGE))
-    total_message = total_message + MESSAGE
-
+    server = 'london.acm.jhu.edu'
+    port = 25565
+    buffer_size = 2048
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    s.connect((TCP_IP, TCP_PORT))
-    s.send(total_message)
+    s.connect((server, port))
 
-    msg2 = bytearray()
-    msg2.append(0)
-    player_name = 'Turdy'
-    msg2.append(len(player_name))
-    for c in unicode(player_name, "utf-8"):
-        msg2.append(ord(c))
-
-    msg3 = bytearray()
-    msg3.append(len(msg2))
-    msg3 = msg3 + msg2
-    s.send(msg3)
-
-    data = s.recv(2048)
+    s.send(s_handshake(47, server, port, 2))
+    s.send(s_login_start('Turdy'))
+    data = s.recv(buffer_size)
     s.close()
 
     print "received data:", data
