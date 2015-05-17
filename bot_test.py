@@ -3,6 +3,8 @@
 # This is a test script for a simple Minecraft bot. This uses the server
 # protocol found at http://wiki.vg/Protocol to authenticate with a server,
 # connect to the server, and perform some simple chat and movement operations.
+# We later abstract some of these helper functions into a library for
+# creating a general purpose bot.
 
 import sys
 import socket
@@ -22,7 +24,7 @@ def wrap_packet(func):
 # Used to convert a standard Python integer into a VarInt.
 def varint(num):
     binary = "{:b}".format(num)
-    while len(binary) % 7 != 0: # pad until full
+    while len(binary) % 7 != 0:  # pad until full
         binary = '0' + binary
     bytes = []
     byte_parts = [binary[x:x+7] for x in xrange(0, len(binary), 7)]
@@ -61,7 +63,17 @@ def append_packet(packet, gen_func, *args):
         packet.append(byte)
 
 
-# Send a Handshake packet to the server.
+# Function that reads the next VarInt from the stream.
+def read_varint(socket):
+    socket.recv()
+
+
+# Function that handles reading a packet from the server. 
+def read_packet(socket):
+    socket.recv(1)
+
+
+# Prepare a Handshake packet to the server.
 @wrap_packet
 def s_handshake(version, server_addr, port, mode):
     payload = bytearray()
@@ -73,7 +85,7 @@ def s_handshake(version, server_addr, port, mode):
     return payload
 
 
-# Send a Login Start packet to the server.
+# Prepare a Login Start packet to the server.
 @wrap_packet
 def s_login_start(name):
     payload = bytearray()
@@ -82,6 +94,7 @@ def s_login_start(name):
     return payload
 
 
+# Main method and program entry point.
 def main():
     server = 'london.acm.jhu.edu'
     port = 25565
@@ -91,10 +104,11 @@ def main():
 
     s.send(s_handshake(47, server, port, 2))
     s.send(s_login_start('Turdy'))
-    data = s.recv(buffer_size)
+    read_packet(s)
+
     s.close()
 
-    print "received data:", data
+    print 'received data:{}'.format(data)
 
 if __name__ == "__main__":
     main()
