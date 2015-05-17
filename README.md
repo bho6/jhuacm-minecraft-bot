@@ -1,12 +1,12 @@
-## JHU ACM Minecraft Bot
+# JHU ACM Minecraft Bot
 By Brian Ho, bho6@jhu.edu
 
-# Overview
+## Overview
 
 This project aims to create an *extensible and standalone* Minecraft bot that will reside on the JHU ACM Minecraft server (london.acm.jhu.edu:25565). The bot will send and receive packets from the server (like any old Notchian client) to update global position and *maintain an internal representation of the environment*. Thus, the bot will abstract away all low level packet encoding/decoding and instead expose a simple interface for accessing information about the world or performing actions. The bot programmer can then use these high level functions to write scripts that dictate bot behavior.
 
 
-# Exposed API
+## Exposed API
 
 This section is still in flux as the bot is being developed, but the basic design is as follows:
 
@@ -17,6 +17,6 @@ This section is still in flux as the bot is being developed, but the basic desig
 - The bot will first be created as a minimum viable product that only handles a subset of events based on incoming packets and performable actions. For example, this implementation will not have functionality for emitting an event when fireworks are displayed or making the bot hop into a minecart. However, the bot will be easily extended to handle any packet, so the eager programmer should be able to add functionality as needed without much hassle or low-level code glue.
 
 
-# Special Thanks
+## Special Thanks
 
 I would like to thank the folks at [http://wiki.vg/](http://wiki.vg/) for providing relatively complete documentation on the server protocol.
