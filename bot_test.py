@@ -4,7 +4,9 @@
 # protocol found at http://wiki.vg/Protocol to authenticate with a server,
 # connect to the server, and perform some simple chat and movement operations.
 # We later abstract some of these helper functions into a library for
-# creating a general purpose bot.
+# creating a general purpose bot. As a disclaimer, I am not familiar with a
+# binary manipulation in Python, so I might do things inefficiently with
+# binary strings. Sue me.
 
 import sys
 import socket
@@ -22,6 +24,7 @@ def wrap_packet(func):
 
 
 # Used to convert a standard Python integer into a VarInt.
+# TODO: Fix ordering?
 def varint(num):
     binary = "{:b}".format(num)
     while len(binary) % 7 != 0:  # pad until full
@@ -63,14 +66,61 @@ def append_packet(packet, gen_func, *args):
         packet.append(byte)
 
 
+# Helper function for easily reading a single byte.
+def read_byte(socket):
+    return read_bytes(socket, 1)[0]
+
+
+# Read the next num bytes from the stream and return a list of binary strings.
+def read_bytes(socket, num_bytes):
+    bytes = socket.recv(num_bytes)
+    output = []
+    for i in xrange(0, num_bytes):
+        byte = "{:b}".format(ord(bytes[i]))
+        while len(byte) < 8:
+            byte = '0' + byte
+        output.append(byte)
+    return output
+
+
+# Read the next string from the stream where the first element is a VarInt of
+# length, and the next bytes constitute the string in UTF-8.
+def read_string(socket):
+    length = read_varint(socket)
+    return socket.recv(length)
+
+
+# Read the next num bytes and convert to a Python integer.
+def read_number(socket, num_bytes):
+    bytes = read_bytes(socket, num_bytes)
+    num = ''
+    for byte in bytes:
+        num += byte
+    return int(num, 2)
+
+
 # Function that reads the next VarInt from the stream.
 def read_varint(socket):
-    socket.recv()
+    total_int = ''
+    while True:
+        next_byte = read_byte(socket)
+        total_int = next_byte[1:] + total_int
+        if next_byte[0] == '0':
+            break
+    return int(total_int, 2)
 
 
 # Function that handles reading a packet from the server. 
 def read_packet(socket):
-    socket.recv(1)
+    length = read_varint(socket)
+    packet_id = read_number(socket, 1)
+    # pattern = recv_packet_info[packet_id]
+
+
+    print read_string(socket)
+    print read_string(socket)
+    print read_string(socket)
+
 
 
 # Prepare a Handshake packet to the server.
@@ -98,17 +148,18 @@ def s_login_start(name):
 def main():
     server = 'london.acm.jhu.edu'
     port = 25565
-    buffer_size = 2048
+    buffer_size = 10000
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     s.connect((server, port))
 
     s.send(s_handshake(47, server, port, 2))
     s.send(s_login_start('Turdy'))
+    # print len(s.recv(buffer_size))
     read_packet(s)
 
     s.close()
 
-    print 'received data:{}'.format(data)
+    # print 'received data:{}'.format(data)
 
 if __name__ == "__main__":
     main()
