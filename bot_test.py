@@ -96,7 +96,8 @@ def varint(num):
     while len(binary) % 7 != 0:  # pad until full
         binary = '0' + binary
     bytes = []
-    byte_parts = list(reversed([binary[x:x+7] for x in xrange(0, len(binary), 7)]))
+    byte_parts = list(
+        reversed([binary[x:x+7] for x in xrange(0, len(binary), 7)]))
     for b in byte_parts[:-1]:
         bytes.append(int('1{}'.format(b), 2))
     bytes.append(int('0{}'.format(byte_parts[-1]), 2))
@@ -200,6 +201,8 @@ login_packet_info = {
 play_packet_info = {
     # Keep alive
     0: [('id', 'varint')],
+    # Chat message
+    2: [('chat', 'string'), ('position', 'byte')],
 }
 
 
@@ -235,6 +238,8 @@ def read_packet(socket, state):
             response[arg] = read_string(socket)
         elif arg_type == 'varint':
             response[arg] = read_varint(socket)
+        elif arg_type == 'byte':
+            response[arg] = read_byte(socket)
         else:
             print 'Cannot parse type of {}'.format(arg_type)
 
@@ -298,6 +303,15 @@ def s_keep_alive(response_id):
     payload = bytearray()
     append_packet(payload, bnum, 0, 1)
     append_packet(payload, varint, response_id)
+    return payload
+
+
+# Prepare a Chat Message packet to the server.
+@wrap_packet
+def s_chat_message(msg):
+    payload = bytearray()
+    append_packet(payload, bnum, 1, 1)
+    append_packet(payload, string, msg)
     return payload
 
 
@@ -371,17 +385,20 @@ def get_auth_token(username, password):
 
 # Main method and program entry point.
 def main():
-    # sys.setrecursionlimit(50000)
-
     # get login credentials
     sys.stdout.write('Username: ')
     username = sys.stdin.readline().strip()
     password = getpass.getpass().strip()
 
     auth_token, profile, username = get_auth_token(username, password)
-    server = 'london.acm.jhu.edu'
+    sys.stdout.write('Server: ')
+    server = sys.stdin.readline().strip()
     port = 25565
-    buffer_size = 10000
+    colon_index = server.find(':')
+    if colon_index != -1:
+        port = server[colon_index+1:]
+        server = int(server[:colon_index])
+
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     s.connect((server, port))
 
@@ -405,10 +422,20 @@ def main():
     print response['uuid'], response['username']
     environment_info['state'] = 'play'
 
+    s.send(s_chat_message(
+        'Hello, World! I am your friendly JHU ACM Minecraft bot!' +
+        ' I am pleased to make your acquaintance.'))
+
     while True:
         response = read_packet(s, environment_info['state'])
-        if response is not None and response['packet_id'] == 0:
-            s.send(s_keep_alive(response['id']))
+        if response is not None:
+            if response['packet_id'] == 0:
+                s.send(s_keep_alive(response['id']))
+            elif response['packet_id'] == 2:
+                if int(response['position'], 2) == 0:
+                    data = json.loads(response['chat'])
+                    if data['with'][0]['text'] != username:
+                        s.send(s_chat_message(str(data['with'][-1])))
 
     s.close()
 
