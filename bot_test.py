@@ -26,7 +26,8 @@ from Crypto.Cipher import AES
 # a cleaner representation once all the code is factored out of a test script.
 environment_info = {
     'secret_iv': None,
-    'cipher': None,
+    'recv_cipher': None,
+    'send_cipher': None,
     'state': 'login',
     'compress': -1,
     'buffer': ''
@@ -34,13 +35,33 @@ environment_info = {
 
 
 # Used as a decorator function to prepend generated packets with a header
-# containing the size of the packet ID + payload.
+# containing the size of the packet ID + payload. This is a bit inefficent
+# becaur I recreate the payload three times, but this is because I didn't
+# know what I needed to do beforehand. Hopefully this will become clean one
+# day.
 def wrap_packet(func):
     def inner(*args, **kwargs):
         payload = func(*args, **kwargs)
         header = bytearray()
-        append_packet(header, varint, len(payload))
-        return header + payload
+        threshold = environment_info['compress']
+        if threshold != -1:
+            if len(payload) < threshold:
+                append_packet(header, varint, len(payload) + 1)
+                append_packet(header, bnum, 0, 1)
+            else:
+                print 'yeah i don\'t really wakt to write this part yet'
+        else:
+            append_packet(header, varint, len(payload))
+        result = header + payload
+
+
+        cipher = environment_info['send_cipher']
+        if cipher is None:
+            return result
+        encrypted = bytearray()
+        for byte in result:
+            encrypted.append(cipher.encrypt(chr(byte)))
+        return encrypted
     return inner
 
 
@@ -48,18 +69,25 @@ def wrap_packet(func):
 # is enabled. It also pulls from the buffer instead of the TCP connection
 # when the buffer is not empty.
 def decrypt_recv(socket, num_bytes):
-    buffer_data = environment_info['buffer']
-    if num_bytes > len(buffer_data):
-        data = buffer_data + socket.recv(num_bytes - len(buffer_data))
-    else:
-        data = buffer_data[:num_bytes]
-        print 'dataasdfasdf', data
-        print 'bufferafter', buffer_data[num_bytes:]
+    def inner(socket, num_bytes):
+        buffer_data = environment_info['buffer']
+        if num_bytes > len(buffer_data):
+            data = socket.recv(num_bytes - len(buffer_data))
+            secret = environment_info['secret_iv']
+            if secret is not None:
+                data = environment_info['recv_cipher'].decrypt(data)
+            environment_info['buffer'] = ''
+            return buffer_data + data
         environment_info['buffer'] = buffer_data[num_bytes:]
-    secret = environment_info['secret_iv']
-    if secret is not None:
-        data = environment_info['cipher'].decrypt(data)
-    return data
+        return buffer_data[:num_bytes]
+
+    bytes_left = num_bytes
+    total_result = ''
+    while bytes_left > 0:
+        result = inner(socket, bytes_left)
+        total_result += result
+        bytes_left -= len(result)
+    return total_result
 
 
 # Used to convert a standard Python integer into a VarInt.
@@ -164,12 +192,15 @@ login_packet_info = {
     # Login Success
     2: [('uuid', 'string'), ('username', 'string')],
     # Set Compression
-    3: [('threshold', 'varint')]
+    3: [('threshold', 'varint')],
 }
 
 
 # Similar to login_packet_info, except used in the play state.
-play_packet_info = {}
+play_packet_info = {
+    # Keep alive
+    0: [('id', 'varint')],
+}
 
 
 # Function that handles reading a packet from the server. 
@@ -181,14 +212,10 @@ def read_packet(socket, state):
             length = packet_length - 1
         else:
             length = data_length
-            # 204, 394
-            print packet_length, data_length
             cl = math.ceil(len('{:b}'.format(length)) / 7.0)
             compressed_data = decrypt_recv(socket, packet_length - int(cl))
-            print 'skipped', cl
             data = zlib.decompress(compressed_data)
             environment_info['buffer'] = data + environment_info['buffer']
-            print environment_info['buffer']
     else:
         length = read_varint(socket)
     packet_id = read_number(socket, 1)
@@ -197,7 +224,7 @@ def read_packet(socket, state):
     else:
         pattern = login_packet_info.get(packet_id, None)
     if pattern is None:
-        print 'Skipping packet id {} of length {}'.format(packet_id, length)
+        # print 'Skipping packet id {} of length {}'.format(packet_id, length)
         decrypt_recv(socket, length - 1)
         return None
 
@@ -248,8 +275,6 @@ def s_encrypt_response(auth_token, key, token, profile):
 
     # Store the shared secret.
     environment_info['secret_iv'] = shared_secret
-    environment_info['cipher'] = AES.new(
-        shared_secret, AES.MODE_CFB, shared_secret)
 
     # auth with Mojang servers
     authenticate_client(auth_token, profile, key, shared_secret)
@@ -263,6 +288,16 @@ def s_encrypt_response(auth_token, key, token, profile):
     append_packet(payload, byte_array, shared_ctext)
     append_packet(payload, varint, len(token_ctext))
     append_packet(payload, byte_array, token_ctext)
+    return payload
+
+
+# Prepare a Keep Alive packet to the server.
+@wrap_packet
+def s_keep_alive(response_id):
+    print 'KEEP ALIVE'
+    payload = bytearray()
+    append_packet(payload, bnum, 0, 1)
+    append_packet(payload, varint, response_id)
     return payload
 
 
@@ -336,6 +371,8 @@ def get_auth_token(username, password):
 
 # Main method and program entry point.
 def main():
+    # sys.setrecursionlimit(50000)
+
     # get login credentials
     sys.stdout.write('Username: ')
     username = sys.stdin.readline().strip()
@@ -354,6 +391,13 @@ def main():
     s.send(s_encrypt_response(
         auth_token, response['key'], response['token'], profile))
 
+    # Enable encryption
+    shared_secret = environment_info['secret_iv']
+    environment_info['recv_cipher'] = AES.new(
+        shared_secret, AES.MODE_CFB, shared_secret)
+    environment_info['send_cipher'] = AES.new(
+        shared_secret, AES.MODE_CFB, shared_secret)
+
     response = read_packet(s, environment_info['state'])
     environment_info['compress'] = response['threshold']
 
@@ -362,11 +406,11 @@ def main():
     environment_info['state'] = 'play'
 
     while True:
-        read_packet(s, environment_info['state'])
+        response = read_packet(s, environment_info['state'])
+        if response is not None and response['packet_id'] == 0:
+            s.send(s_keep_alive(response['id']))
 
     s.close()
-
-    # print 'received data:{}'.format(data)
 
 if __name__ == "__main__":
     main()
