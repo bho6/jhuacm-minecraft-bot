@@ -13,9 +13,24 @@ import socket
 import getpass
 import urllib2
 import json
+import math
 import random
 import hashlib
 import rsa
+import time
+import zlib
+from Crypto.Cipher import AES
+
+
+# Global environment info used to store state. This will be implemented with
+# a cleaner representation once all the code is factored out of a test script.
+environment_info = {
+    'secret_iv': None,
+    'cipher': None,
+    'state': 'login',
+    'compress': -1,
+    'buffer': ''
+}
 
 
 # Used as a decorator function to prepend generated packets with a header
@@ -29,6 +44,24 @@ def wrap_packet(func):
     return inner
 
 
+# Helper function that wraps around recv() to also decrypt when encryption
+# is enabled. It also pulls from the buffer instead of the TCP connection
+# when the buffer is not empty.
+def decrypt_recv(socket, num_bytes):
+    buffer_data = environment_info['buffer']
+    if num_bytes > len(buffer_data):
+        data = buffer_data + socket.recv(num_bytes - len(buffer_data))
+    else:
+        data = buffer_data[:num_bytes]
+        print 'dataasdfasdf', data
+        print 'bufferafter', buffer_data[num_bytes:]
+        environment_info['buffer'] = buffer_data[num_bytes:]
+    secret = environment_info['secret_iv']
+    if secret is not None:
+        data = environment_info['cipher'].decrypt(data)
+    return data
+
+
 # Used to convert a standard Python integer into a VarInt.
 def varint(num):
     binary = '{:b}'.format(num)
@@ -36,7 +69,6 @@ def varint(num):
         binary = '0' + binary
     bytes = []
     byte_parts = list(reversed([binary[x:x+7] for x in xrange(0, len(binary), 7)]))
-    # print num, byte_parts
     for b in byte_parts[:-1]:
         bytes.append(int('1{}'.format(b), 2))
     bytes.append(int('0{}'.format(byte_parts[-1]), 2))
@@ -85,7 +117,7 @@ def read_byte(socket):
 
 # Read the next num bytes from the stream and return a list of binary strings.
 def read_bytes(socket, num_bytes):
-    bytes = socket.recv(num_bytes)
+    bytes = decrypt_recv(socket, num_bytes)
     output = []
     for i in xrange(0, num_bytes):
         byte = "{:b}".format(ord(bytes[i]))
@@ -99,7 +131,7 @@ def read_bytes(socket, num_bytes):
 # length, and the next bytes constitute the string in UTF-8.
 def read_string(socket):
     length = read_varint(socket)
-    return socket.recv(length)
+    return decrypt_recv(socket, length)
 
 
 # Read the next num bytes and convert to a Python integer.
@@ -125,10 +157,14 @@ def read_varint(socket):
 # Dictionary to more easily handle receiving packets during the login state.
 # In this, each packet ID is mapped to a list of arguments with types.
 login_packet_info = {
+    # Disconnect
+    0: [('reason', 'string')],
     # Encryption Request
     1: [('sid', 'string'), ('key', 'string'), ('token', 'string')],
     # Login Success
     2: [('uuid', 'string'), ('username', 'string')],
+    # Set Compression
+    3: [('threshold', 'varint')]
 }
 
 
@@ -138,7 +174,23 @@ play_packet_info = {}
 
 # Function that handles reading a packet from the server. 
 def read_packet(socket, state):
-    length = read_varint(socket)
+    if environment_info['compress'] != -1:
+        packet_length = read_varint(socket)
+        data_length = read_varint(socket)
+        if data_length == 0:
+            length = packet_length - 1
+        else:
+            length = data_length
+            # 204, 394
+            print packet_length, data_length
+            cl = math.ceil(len('{:b}'.format(length)) / 7.0)
+            compressed_data = decrypt_recv(socket, packet_length - int(cl))
+            print 'skipped', cl
+            data = zlib.decompress(compressed_data)
+            environment_info['buffer'] = data + environment_info['buffer']
+            print environment_info['buffer']
+    else:
+        length = read_varint(socket)
     packet_id = read_number(socket, 1)
     if state == 'play':
         pattern = play_packet_info.get(packet_id, None)
@@ -146,13 +198,16 @@ def read_packet(socket, state):
         pattern = login_packet_info.get(packet_id, None)
     if pattern is None:
         print 'Skipping packet id {} of length {}'.format(packet_id, length)
-        socket.recv(length)
+        decrypt_recv(socket, length - 1)
         return None
 
-    response = {}
+
+    response = {'packet_id': packet_id}
     for (arg, arg_type) in pattern:
         if arg_type == 'string':
             response[arg] = read_string(socket)
+        elif arg_type == 'varint':
+            response[arg] = read_varint(socket)
         else:
             print 'Cannot parse type of {}'.format(arg_type)
 
@@ -182,7 +237,7 @@ def s_login_start(name):
 
 # Prepare an Encryption Response packet to the server.
 @wrap_packet
-def s_encrypt_response(auth_token, key, token):
+def s_encrypt_response(auth_token, key, token, profile):
     payload = bytearray()
     append_packet(payload, bnum, 1, 1)
     shared_secret = ''
@@ -191,8 +246,13 @@ def s_encrypt_response(auth_token, key, token):
         rand_byte = random.randrange(0, 255)
         shared_secret += chr(rand_byte)
 
+    # Store the shared secret.
+    environment_info['secret_iv'] = shared_secret
+    environment_info['cipher'] = AES.new(
+        shared_secret, AES.MODE_CFB, shared_secret)
+
     # auth with Mojang servers
-    authenticate_client(auth_token, u'b3dd187e97844527a7531e60498156fd', key, shared_secret)
+    authenticate_client(auth_token, profile, key, shared_secret)
 
     # some RSA cypto mumbo jumbo
     pub = rsa.PublicKey.load_pkcs1_openssl_der(key)
@@ -261,8 +321,7 @@ def get_auth_token(username, password):
             'version': 1
         },
         'username': username,
-        'password': password,
-        # 'clientToken': 'JHUACMBOT'
+        'password': password
     })
     req = urllib2.Request('https://authserver.mojang.com/authenticate')
     req.add_header('Content-Type', 'application/json')
@@ -271,8 +330,8 @@ def get_auth_token(username, password):
     except urllib2.HTTPError:
         print 'Invalid username/password combination'
         sys.exit(1)
-    # print response
-    return response['accessToken']
+    return (response['accessToken'], response['availableProfiles'][0]['id'],
+        str(response['availableProfiles'][0]['name']))
 
 
 # Main method and program entry point.
@@ -282,23 +341,28 @@ def main():
     username = sys.stdin.readline().strip()
     password = getpass.getpass().strip()
 
-    auth_token = get_auth_token(username, password)
-    server = '52.6.0.120'
+    auth_token, profile, username = get_auth_token(username, password)
+    server = 'london.acm.jhu.edu'
     port = 25565
     buffer_size = 10000
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     s.connect((server, port))
 
     s.send(s_handshake(47, server, port, 2))
-    s.send(s_login_start('Turdy'))
-    response = read_packet(s, 'login')
-    print response
-    s.send(s_encrypt_response(auth_token, response['key'], response['token']))
-    response = s.recv(1)
-    for c in response:
-        print ord(c), c
-    # print len(response), response
-    # response = read_packet(s, 'play')
+    s.send(s_login_start(username))
+    response = read_packet(s, environment_info['state'])
+    s.send(s_encrypt_response(
+        auth_token, response['key'], response['token'], profile))
+
+    response = read_packet(s, environment_info['state'])
+    environment_info['compress'] = response['threshold']
+
+    response = read_packet(s, environment_info['state'])
+    print response['uuid'], response['username']
+    environment_info['state'] = 'play'
+
+    while True:
+        read_packet(s, environment_info['state'])
 
     s.close()
 

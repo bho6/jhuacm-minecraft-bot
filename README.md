@@ -10,7 +10,7 @@ This project aims to create an *extensible and standalone* Minecraft bot that wi
 
 This section is still in flux as the bot is being developed, but the basic design is as follows:
 
-- The bot's functionality is split into two parts. The first is the master program which maintains world information, and the second is any number of user created programs that the master program coordinates. Each user created program can subscribe to events from the master program like timer, movement_update, and chat with a callback function. The master program emits events to subscribers upon receiving the relevant packets from the server and envoke the corresponding callback function. The master program also divides its child programs into two groups: active and inactive. Through this, inactive programs will not receive event updates, and any program's execution state can be controlled through in-game chat (ex: mcbot run defend_base).
+- The bot's functionality is split into two parts. The first is the master program which maintains world information, and the second is any number of user created programs that the master program coordinates. Each user created program can subscribe to events from the master program like timer, movement-update, and chat with a callback function. The master program emits events to subscribers upon receiving the relevant packets from the server and envoke the corresponding callback function. The master program also divides its child programs into two groups: active and inactive. Through this, inactive programs will not receive event updates, and any program's execution state can be controlled through in-game chat (ex: mcbot run defend-base).
 
 - The master program in the bot authenticates and logs into the server on its own and then starts decoding received packets. Based on the content in these packets, the bot will be able to maintain an internal representation of the surrounding world (chunk data, nearby players, health, current position, etc). The bot will also expose methods for performing actions (move forward, turn x degrees, chat, jump, etc). Upon receiving events, running child programs can use the world representation and actions API to express almost any bot behavior.
 
@@ -19,4 +19,4 @@ This section is still in flux as the bot is being developed, but the basic desig
 
 ## Special Thanks
 
-I would like to thank the folks at [http://wiki.vg/](http://wiki.vg/) for providing relatively complete documentation on the server protocol.
+I would like to thank the folks at [http://wiki.vg/](http://wiki.vg/) for providing thorough documentation on the server protocol. In addition, the work on [PyCrypto](https://www.dlitz.net/software/pycrypto/) and [Python RSA](http://stuvel.eu/rsa) have been very useful for the authentication/encryption for the bot.
